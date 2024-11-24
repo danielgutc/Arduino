@@ -22,17 +22,20 @@ MeGyro gyro(1, 0x69); // Giroscope
 TFminiS tfmini(tfSerial); // Lidar
 //--
 
-#define TARGET_ROTATION 900
-
 /*****************/
 /*      Common   */
 /*****************/
+#define WEIGHT_SERVO_ROTATION 1
+#define WEIGHT_DISTANCE 1
+#define MAX_SPEED 100
+
 int state = 0; // 0 - stopped; 1 - forward; 2 - backguard; 3 - rotating right; 4 - rotating left
 int distance = 0;
-int moveSpeed = 100;
 float currentRotation = 0;
 Ewma gyroAdcFilter(0.2);  // Gyro moving average. More smoothing - less prone to noise, but slower to detect changes
 float gyroRotX;
+String receivedMessage = "";
+float angle;
 
 /*****************/
 /*      Lidar    */
@@ -65,7 +68,7 @@ void updateGyro()
   
   if (gyroRotX > 0.2) 
   {
-    currentRotation += gyroRotX;
+    currentRotation += gyroReading;
   }  
 }
 
@@ -97,35 +100,48 @@ void isr_process_motor2(void) // count the ticks - i.e. how far the motor has mo
   }
 }
 
-void turnLeft(void)
+
+void move(float leftSpeed, float rightSpeed)
 {
-  motor1.setMotorPwm(-moveSpeed);
-  motor2.setMotorPwm(-moveSpeed);
+  motor1.setMotorPwm((int)-leftSpeed); 
+  motor2.setMotorPwm((int)rightSpeed);
 }
 
-void turnRight(void)
+void move() 
 {
-  motor1.setMotorPwm(moveSpeed);
-  motor2.setMotorPwm(moveSpeed);
+  float leftSpeed = MAX_SPEED;
+  float rightSpeed = -MAX_SPEED;
+
+  if (angle > 90 && distance < 50)
+  {
+    float angle_radians = (M_PI * (angle - 90.0)) / 180.0;
+    leftSpeed = leftSpeed * (1 - sin(angle_radians) * (1 - exp(-WEIGHT_DISTANCE * distance)));
+  }
+
+  if (angle < 90 && distance < 50)
+  {
+    float angle_radians = (M_PI * (angle - 90.0)) / 180.0;
+    rightSpeed = rightSpeed * (1 - sin(angle_radians) * (1 - exp(-WEIGHT_DISTANCE * distance)));
+  }
+
+  Serial.print(", LeftSpeed:");
+  Serial.print(leftSpeed);
+  Serial.print(", RightSpeed:");
+  Serial.print(rightSpeed);
+
+  move(leftSpeed, rightSpeed);
 }
 
-void forward(void)
+void stop()
 {
-  motor1.setMotorPwm(-moveSpeed); // setMotorPwm writes to the encoder controller
-  motor2.setMotorPwm(moveSpeed);  // so setting the speed change instantly
-}
-
-void Backward(void)
-{
-  motor1.setMotorPwm(moveSpeed);
-  motor2.setMotorPwm(-moveSpeed);
+  motor1.setMotorPwm(0);
+  motor2.setMotorPwm(0);
 }
 
 /*******************/
 /* Extension Comms */
 /*******************/
-String receivedMessage = "";
-int angle;
+
 void receiveEvent(int howMany) 
 {
   // while (Wire.available()) 
@@ -183,80 +199,20 @@ void loop()
 {
   updateDistance();
   updateGyro();
-
-  if (state == 0) // Start fordward if stopped
-  {  
-    state = 1;
-    currentRotation = 0;
-  }
-  else if (state == 1) // Forward
-  {
-    currentRotation = 0;
-    if (distance < 30)
-    {
-      if (rand() % 2 == 0)
-      {
-        turnLeft();
-        state = 3;
-      }
-      else
-      {
-        turnRight();
-        state = 4;
-      }
-    }
-    else // Keep forwrads
-    {
-      forward();
-    } 
-  }
-  else if (state == 2) // Turning back
-  {
-    if (distance >= 30)
-    {
-      state = 0;
-    }
-  }
-  else if (state == 3) // Rotating right
-  {
-    if (distance >= 30 && currentRotation >= TARGET_ROTATION)
-    {
-      state = 0;
-    }
-    else 
-    {
-      turnRight();
-    }
-  }
-  else if (state == 4) // Rotating left
-  {
-    if (distance >= 30 && currentRotation >= TARGET_ROTATION)
-    {
-      state = 0;
-    }
-    else 
-    {
-      turnLeft();
-    }
-  }
   
-  Serial.print("State:");
-  Serial.print(state);
-  Serial.print(", CurrentRotation:");
-  Serial.print(currentRotation);
+  //Serial.print("State:");
+  //Serial.print(state);
+  //Serial.print(", CurrentRotation:");
+  //Serial.print(currentRotation);
   Serial.print(", Distance:");
   Serial.print(distance);
-  Serial.print(", GyroscopeAvgX:");
-  Serial.print(gyroRotX);
+  //Serial.print(", GyroscopeAvgX:");
+  //Serial.print(gyroRotX);
   Serial.print(", Servo Angle:");
   Serial.print(angle);
-    
-  // if (receivedMessage.length() > 0) 
-  // {
-  //   Serial.print(", Servo Angle: " + receivedMessage);
-  //   receivedMessage = ""; // Clear the message after processing
-  // }
   
+  move();
+
   Serial.println();
 }
 

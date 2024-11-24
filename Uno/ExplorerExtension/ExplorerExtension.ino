@@ -5,7 +5,7 @@
 
 #define SENSOR_1    1
 #define WIRE_START  -1
-#define SERVO_SPEED 0.1
+#define SERVO_SPEED 1
 
 Servo servo;
 float angle = 0;
@@ -31,7 +31,6 @@ void loop() {
   }
 
   // Messaging
-  String message = "This is a test ";
   Wire.beginTransmission(1); // transmit to device #1
   Wire.write((int) angle);
   Wire.endTransmission();    // stop transmitting
