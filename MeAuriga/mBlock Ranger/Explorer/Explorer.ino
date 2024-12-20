@@ -27,6 +27,7 @@ TFminiS tfmini(tfSerial); // Lidar
 /*****************/
 #define WEIGHT_SERVO_ROTATION 1
 #define WEIGHT_DISTANCE 1
+#define MIN_DISTANCE 400
 #define MAX_SPEED 100
 
 int state = 0; // 0 - stopped; 1 - forward; 2 - backguard; 3 - rotating right; 4 - rotating left
@@ -110,20 +111,32 @@ void move(float leftSpeed, float rightSpeed)
 void move() 
 {
   float leftSpeed = MAX_SPEED;
-  float rightSpeed = -MAX_SPEED;
+  float rightSpeed = MAX_SPEED;
+  float speedModifier = 0;
+  float angleRadians = 0;
 
-  if (angle > 90 && distance < 50)
+  angleRadians = (M_PI * (angle - 90.0)) / 180.0;
+  speedModifier = (1 - fabs(sin(angleRadians))) * (1 - exp(-WEIGHT_DISTANCE * distance)); //remobe fabs to apply modifier to bot speeds?
+
+  /*
+  if (angle < 90 && distance < MIN_DISTANCE)
   {
-    float angle_radians = (M_PI * (angle - 90.0)) / 180.0;
-    leftSpeed = leftSpeed * (1 - sin(angle_radians) * (1 - exp(-WEIGHT_DISTANCE * distance)));
+    angleRadians = (M_PI * (angle - 90.0)) / 180.0;
+    speedModifier = 1 - sin(angleRadians) * (1 - exp(-WEIGHT_DISTANCE * distance));
+    leftSpeed = leftSpeed * speedModifier;
   }
 
-  if (angle < 90 && distance < 50)
+  if (angle > 90 && distance < MIN_DISTANCE)
   {
-    float angle_radians = (M_PI * (angle - 90.0)) / 180.0;
-    rightSpeed = rightSpeed * (1 - sin(angle_radians) * (1 - exp(-WEIGHT_DISTANCE * distance)));
-  }
+    angleRadians = (M_PI * (angle)) / 180.0;
+    speedModifier = 1 - sin(angleRadians) * (1 - exp(-WEIGHT_DISTANCE * distance));
+    rightSpeed = rightSpeed * speedModifier;
+  }*/
 
+  Serial.print(", AngleRadians:");
+  Serial.print(angleRadians);
+  Serial.print(", SpeedModifier:");
+  Serial.print(speedModifier);
   Serial.print(", LeftSpeed:");
   Serial.print(leftSpeed);
   Serial.print(", RightSpeed:");
