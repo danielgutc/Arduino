@@ -26,8 +26,8 @@ TFminiS tfmini(tfSerial); // Lidar
 /*      Common   */
 /*****************/
 #define WEIGHT_SERVO_ROTATION 1
-#define WEIGHT_DISTANCE 1
-#define MIN_DISTANCE 400
+#define WEIGHT_DISTANCE 0.1
+#define MIN_DISTANCE 100
 #define MAX_SPEED 100
 
 int state = 0; // 0 - stopped; 1 - forward; 2 - backguard; 3 - rotating right; 4 - rotating left
@@ -116,22 +116,18 @@ void move()
   float angleRadians = 0;
 
   angleRadians = (M_PI * (angle - 90.0)) / 180.0;
-  speedModifier = (1 - fabs(sin(angleRadians))) * (1 - exp(-WEIGHT_DISTANCE * distance)); //remobe fabs to apply modifier to bot speeds?
+  speedModifier = 1 - (fabs(sin(angleRadians)) * (1 - exp(-WEIGHT_DISTANCE * distance))); //remobe fabs to apply modifier to bot speeds?
 
-  /*
+  
   if (angle < 90 && distance < MIN_DISTANCE)
   {
-    angleRadians = (M_PI * (angle - 90.0)) / 180.0;
-    speedModifier = 1 - sin(angleRadians) * (1 - exp(-WEIGHT_DISTANCE * distance));
-    leftSpeed = leftSpeed * speedModifier;
+    leftSpeed = MAX_SPEED * speedModifier;
   }
 
   if (angle > 90 && distance < MIN_DISTANCE)
   {
-    angleRadians = (M_PI * (angle)) / 180.0;
-    speedModifier = 1 - sin(angleRadians) * (1 - exp(-WEIGHT_DISTANCE * distance));
-    rightSpeed = rightSpeed * speedModifier;
-  }*/
+    rightSpeed = MAX_SPEED * speedModifier;
+  }
 
   Serial.print(", AngleRadians:");
   Serial.print(angleRadians);

@@ -24,11 +24,11 @@ void setup() {
 
 void loop() {
   // Servo motor
-  servo.write(angle);
   angle = angle + (SERVO_SPEED * direction);
   if (angle > 180 || angle < 0) {
     direction = direction * -1;
   }
+  servo.write(angle);
 
   // Messaging
   Wire.beginTransmission(1); // transmit to device #1
@@ -39,6 +39,6 @@ void loop() {
   Serial.print(angle);
   Serial.println();
   
-  //delay(100);
+  delay(10);
 
 }
