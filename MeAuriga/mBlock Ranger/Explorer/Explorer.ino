@@ -26,9 +26,9 @@ TFminiS tfmini(tfSerial); // Lidar
 /*      Common   */
 /*****************/
 #define WEIGHT_SERVO_ROTATION 1
-#define WEIGHT_DISTANCE 0.1
-#define MIN_DISTANCE 100
-#define MAX_SPEED 100
+#define WEIGHT_DISTANCE 1
+#define MIN_DISTANCE 50
+#define MAX_SPEED 75
 
 int state = 0; // 0 - stopped; 1 - forward; 2 - backguard; 3 - rotating right; 4 - rotating left
 int distance = 0;
