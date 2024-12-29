@@ -28,29 +28,15 @@ TFminiS tfmini(tfSerial); // Lidar
 #define WEIGHT_SERVO_ROTATION 1
 #define WEIGHT_DISTANCE 1
 #define MIN_DISTANCE 50
-#define MIN_OPEN_ANGLE 27
 #define MAX_SPEED 75
-#define MIN_ANGLE 0
-#define MAX_ANGLE 180
-#define MAX_ANGLE_TOLERANCE 5
-#define ANGLE_TO_MOTOR_MULTIPLIER 6 
 
-int state = 0;
-int leftMotorPosition = 0;
-int rightMotorPosition = 0;
+int state = 0; // 0 - stopped; 1 - forward; 2 - backguard; 3 - rotating right; 4 - rotating left
+int distance = 0;
 float currentRotation = 0;
 Ewma gyroAdcFilter(0.2);  // Gyro moving average. More smoothing - less prone to noise, but slower to detect changes
 float gyroRotX;
 String receivedMessage = "";
 float angle;
-
-int distances[180];
-int startOpenAngle = 0;
-int endOpenAngle = 0;
-int scanState = 0;
-int targetAngle = -1;
-int frontDistance = 0;
-int distance = 0;
 
 /*****************/
 /*      Lidar    */
@@ -122,6 +108,39 @@ void move(float leftSpeed, float rightSpeed)
   motor2.setMotorPwm((int)rightSpeed);
 }
 
+void move() 
+{
+  float leftSpeed = MAX_SPEED;
+  float rightSpeed = MAX_SPEED;
+  float speedModifier = 0;
+  float angleRadians = 0;
+
+  angleRadians = (M_PI * (angle - 90.0)) / 180.0;
+  speedModifier = 1 - (fabs(sin(angleRadians)) * (1 - exp(-WEIGHT_DISTANCE * distance))); //remobe fabs to apply modifier to bot speeds?
+
+  
+  if (angle < 90 && distance < MIN_DISTANCE)
+  {
+    leftSpeed = MAX_SPEED * speedModifier;
+  }
+
+  if (angle > 90 && distance < MIN_DISTANCE)
+  {
+    rightSpeed = MAX_SPEED * speedModifier;
+  }
+
+  Serial.print(", AngleRadians:");
+  Serial.print(angleRadians);
+  Serial.print(", SpeedModifier:");
+  Serial.print(speedModifier);
+  Serial.print(", LeftSpeed:");
+  Serial.print(leftSpeed);
+  Serial.print(", RightSpeed:");
+  Serial.print(rightSpeed);
+
+  move(leftSpeed, rightSpeed);
+}
+
 void stop()
 {
   motor1.setMotorPwm(0);
@@ -134,6 +153,12 @@ void stop()
 
 void receiveEvent(int howMany) 
 {
+  // while (Wire.available()) 
+  // {
+  //   //char c = Wire.read(); // Read each byte from the buffer
+  //   //receivedMessage += c; // Append to the string
+
+  // }
   angle = Wire.read();
 }
 
@@ -182,91 +207,21 @@ void setup()
 void loop()
 {
   updateDistance();
-  frontDistance = ultraSensor.distanceCm();
-
-  if (state == 0) // Move forward
-  {
-    if (frontDistance < MIN_DISTANCE) // Stop moving and 
-    {
-      stop();
-      state = 1;
-      scanState = 0;
-    }
-    else
-    {
-      move(MAX_SPEED, MAX_SPEED);
-    }
-  }
-  else if (state == 1) // Steering direction
-  {
-    int intAngle = (int)angle; 
-    if (intAngle >= (MIN_ANGLE + MAX_ANGLE_TOLERANCE) && scanState == 0)
-    {
-      scanState = 1;
-    }
-
-    if (scanState == 1) // Collecting distances
-    {
-      distances[intAngle - 1] = distance;
-    }
-
-    if (scanState == 1 && intAngle >= MAX_ANGLE - MAX_ANGLE_TOLERANCE)
-    {
-      scanState = 2; // All angles scanned
-    }
-
-    if (scanState == 2)
-    {
-      targetAngle = -1;
-      for (int i = MIN_ANGLE; i < MAX_ANGLE - MIN_OPEN_ANGLE ; i++)
-      {
-        if (targetAngle != -1)
-        {
-          state = 3;
-          break;
-        }
-
-        int window_size = 0;
-        targetAngle = i + (MIN_OPEN_ANGLE / 2);
-        for (int j = i; j < i + MIN_OPEN_ANGLE; j++)
-        {
-          if (distances[j] < MIN_DISTANCE)
-          {
-            targetAngle = -1;
-            break;
-          }
-        }
-      }
-
-      if (targetAngle == -1) // No open angle to move found, turn 90 degrees to the left
-      {
-        targetAngle = 0;
-        state = 3;
-      }
-    }
-  }
-  else if (state == 3) // Rotation to the target direction
-  {
-    motor2.setTarPWM(ANGLE_TO_MOTOR_MULTIPLIER * (targetAngle - 90)); // Decrease 90 degrees since the target degree is based on the servo angle
-    motor1.setTarPWM(ANGLE_TO_MOTOR_MULTIPLIER * (targetAngle - 90));
-    motor1.loop();
-    motor2.loop();
-
-    state = 0;
-  }
-
-  Serial.print("State:");
-  Serial.print(state);
+  updateGyro();
+  
+  //Serial.print("State:");
+  //Serial.print(state);
+  //Serial.print(", CurrentRotation:");
+  //Serial.print(currentRotation);
   Serial.print(", Distance:");
   Serial.print(distance);
-  Serial.print(", FrontDistance:");
-  Serial.print(frontDistance);
+  //Serial.print(", GyroscopeAvgX:");
+  //Serial.print(gyroRotX);
   Serial.print(", Servo Angle:");
   Serial.print(angle);
-  Serial.print(", Target Angle:");
-  Serial.print(targetAngle);
   
-  
+  move();
+
   Serial.println();
 }
 

@@ -5,7 +5,7 @@
 
 #define SENSOR_1    1
 #define WIRE_START  -1
-#define SERVO_SPEED 0.1
+#define SERVO_SPEED 0.05
 
 Servo servo;
 float angle = 0;
