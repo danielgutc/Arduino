@@ -3,42 +3,85 @@
 #include <stdlib.h>
 #include <Servo.h>
 
-#define SENSOR_1    1
-#define WIRE_START  -1
-#define SERVO_SPEED 0.05
+#define EXTENSION_I2C_ID 2
+#define MAIN_CONTROLLER_I2C_ID 1
+#define SERVO_PORT_ID 9
+#define SERVO_SPEED 0.5
+#define SERVO_SPEED_MULT 0.5
+#define SERIAL_BAUD 115200
 
 Servo servo;
 float angle = 0;
+float speed = 0;
 int direction = 1;
+int minAngle = 0;
+int maxAngle = 180;
 int x = 0;
 
 void setup() {
+  Serial.begin(SERIAL_BAUD);
+
   // I2C messaging
-  Wire.begin(); 
+  Wire.begin(EXTENSION_I2C_ID);
   Wire.setWireTimeout();
-  Serial.begin(115200);
+  Wire.onReceive(receiveServoAngle);
 
   // Servo
-  servo.attach(9);
+  servo.attach(SERVO_PORT_ID);
+}
+
+void log() {
+  Serial.print("MinAngle: ");
+  Serial.print(minAngle);
+  Serial.print(", MaxAngle: ");
+  Serial.print(maxAngle);
+
+  Serial.print(", Angle: ");
+  Serial.print(angle);
+  Serial.println();
+}
+
+// Receive I2C commands
+void receiveServoAngle(int howMany) {
+  int openAngle = Wire.read();
+
+  if (openAngle == 0) {
+    speed = SERVO_SPEED;
+    minAngle = maxAngle = 90;
+  } else {
+    minAngle = 90 - openAngle / 2;
+    maxAngle = 90 + openAngle / 2;
+
+    if (openAngle > 65) {
+      speed = SERVO_SPEED * SERVO_SPEED_MULT;
+    } else {
+      speed = SERVO_SPEED;
+    }
+  }
 }
 
 void loop() {
   // Servo motor
-  angle = angle + (SERVO_SPEED * direction);
-  if (angle > 180 || angle < 0) {
-    direction = direction * -1;
+  
+  angle += speed * direction;
+
+  if (angle >= maxAngle) {
+    angle = maxAngle;
+    direction = -1;
+  } else if (angle <= minAngle) {
+    angle = minAngle;
+    direction = 1;
   }
   servo.write(angle);
 
   // Messaging
-  Wire.beginTransmission(1); // transmit to device #1
-  Wire.write((int) angle);
-  Wire.endTransmission();    // stop transmitting
- 
-  Serial.print(", Angle: ");
-  Serial.print(angle);
-  Serial.println();
-  
-  //delay(10);
+  char buffer[10];
+  sprintf(buffer, "%d", (int)angle * direction);
+  Wire.beginTransmission(MAIN_CONTROLLER_I2C_ID);  // transmit to main controller
+  Wire.write(buffer);
+  Wire.endTransmission();  // stop transmitting
 
+  log();
+
+  //delay(10);
 }

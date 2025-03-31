@@ -1,163 +1,82 @@
 /**
  * @file    Explorer.ino
  * @author  dani.gutierrez@gmail.com
- * @version V1.0.0
- * @date    2024/03/02
- * @brief   Description: mBot Ranger Explorer.
- *
+ * @version V1.2.0
+ * @date    2024/03/07
+ * @brief   mRobot Explorer - Digital Twin for Arduino C with improved logic from ArduinoController.cs.
  */
 #include <stdlib.h>
+#include <Wire.h>
 #include "MeAuriga.h"
 #include <Math.h>
-#include <Wire.h>
 #include <TFminiS.h>
 #include <Ewma.h>
 
 // Modules and sensors
-MeUltrasonicSensor ultraSensor(PORT_10); // Ultrasonic module
-MeEncoderOnBoard motor1(SLOT1); // Motor encoder 1
-MeEncoderOnBoard motor2(SLOT2); // Motor encoder 2
-MeGyro gyro(1, 0x69); // Giroscope
-#define tfSerial Serial2// Lidar
-TFminiS tfmini(tfSerial); // Lidar
+MeUltrasonicSensor ultraSensor(PORT_10);  // Ultrasonic module
+MeEncoderOnBoard motor1(SLOT1);           // Left Motor
+MeEncoderOnBoard motor2(SLOT2);           // Right Motor
+MeGyro gyro(1, 0x69);                     // Gyroscope
+#define tfSerial Serial2                  // Lidar
+TFminiS tfmini(tfSerial);                 // Lidar
 //--
 
 /*****************/
 /*      Common   */
 /*****************/
-#define WEIGHT_SERVO_ROTATION 1
-#define WEIGHT_DISTANCE 1
 #define MIN_DISTANCE 50
-#define MIN_OPEN_ANGLE 27
 #define MAX_SPEED 75
-#define MIN_ANGLE 0
-#define MAX_ANGLE 180
-#define MAX_ANGLE_TOLERANCE 5
-#define ANGLE_TO_MOTOR_MULTIPLIER 6 
+#define WIDE_SCAN_ANGLE 180
+#define FORWARD_SCAN_ANGLE 60
+#define EXTENSION_I2C_ID 2
+#define MAIN_CONTROLLER_I2C_ID 1
+#define SERIAL_BAUD 115200
+#define TURN_SPEED_MULT 1.5
+#define WAIT_SERVO_POSITION 2500
 
-int state = 0;
-int leftMotorPosition = 0;
-int rightMotorPosition = 0;
-float currentRotation = 0;
-Ewma gyroAdcFilter(0.2);  // Gyro moving average. More smoothing - less prone to noise, but slower to detect changes
-float gyroRotX;
-String receivedMessage = "";
-float angle;
+int leftMotorSpeed = 0;
+int rightMotorSpeed = 0;
+int distanceLidar;
+int distanceUltrasonic;
+int angle = 0;
+int state = 0;  // 0 - stopped, 1 - forward, 2 - backward, 3 - turn left, 4 - turn right, 5 - scan direction
 
-int distances[180];
-int startOpenAngle = 0;
-int endOpenAngle = 0;
-int scanState = 0;
-int targetAngle = -1;
-int frontDistance = 0;
-int distance = 0;
-
-/*****************/
-/*      Lidar    */
-/*****************/
-void updateDistance()
-{
-  tfmini.readSensor();
-
-  int dist = tfmini.getDistance();
-  int strength = tfmini.getStrength();
-  int temperature = tfmini.getTemperature();
-
-  // Check for and handle any errors.
-  if (dist < 0) {
-    //Serial.println(TFminiS::getErrorString(dist));
-  } else {
-    distance = dist;
-  }
-}
-
-/*****************/
-/*      Gyro     */
-/*****************/
-void updateGyro()
-{
-  gyro.update();
-
-  int gyroReading = gyro.getGyroX() * 100;
-  gyroRotX = gyroAdcFilter.filter(fabs(gyroReading)) / 100;
-  
-  if (gyroRotX > 0.2) 
-  {
-    currentRotation += gyroReading;
-  }  
-}
-
-/*****************/
-/*    Movement   */
-/*****************/
-// Enable the motor to know where it is
-void isr_process_motor1(void) // count the ticks - i.e. how far the motor has moved
-{
-  if(digitalRead(motor1.getPortB()) == 0)
-  {
-	  motor1.pulsePosMinus();
-  }
-  else
-  {
-	  motor1.pulsePosPlus();
-  }
-}
-
-void isr_process_motor2(void) // count the ticks - i.e. how far the motor has moved
-{
-  if(digitalRead(motor2.getPortB()) == 0)
-  {
-	  motor2.pulsePosMinus();
-  }
-  else
-  {
-	  motor2.pulsePosPlus();
-  }
-}
-
-
-void move(float leftSpeed, float rightSpeed)
-{
-  motor1.setMotorPwm((int)-leftSpeed); 
-  motor2.setMotorPwm((int)rightSpeed);
-}
-
-void stop()
-{
-  motor1.setMotorPwm(0);
-  motor2.setMotorPwm(0);
-}
-
-/*******************/
-/* Extension Comms */
-/*******************/
-
-void receiveEvent(int howMany) 
-{
-  angle = Wire.read();
-}
+int currentScanDirection = 1;  // Left = -1, Right = 1
+bool currentScanObstacleDetected = false;
+bool obstacleDetected = false;
+int currentScanMaxDistance = -1;
+int currentScanMaxDistanceAngle = -1;
+int maxDistanceAngle = -1;
+bool waitNextScan = false;
 
 /*****************/
 /*    MAIN       */
 /*****************/
-void setup()
-{
-  // Serial
-  Serial.begin(115200);
+void setup() {
+  Serial.begin(SERIAL_BAUD);
 
-  // Communications
-  Wire.begin(1);
-  Wire.onReceive(receiveEvent);
+  //I2C
+  Wire.begin(MAIN_CONTROLLER_I2C_ID);
+  Wire.setWireTimeout();
+  Wire.onReceive(receiveAngle);
 
   // Lidar
-  tfSerial.begin(115200);
-  
+  tfSerial.begin(SERIAL_BAUD);
+
   // Gyro
   gyro.begin();
-  
-  // enable the motor to know where it is
-  attachInterrupt(motor1.getIntNum(), isr_process_motor1, RISING); 
-  attachInterrupt(motor2.getIntNum(), isr_process_motor2, RISING);
+
+  // Enable motor encoder interrupts
+  attachInterrupt(
+    motor1.getIntNum(), []() {
+      motor1.pulsePosPlus();
+    },
+    RISING);
+  attachInterrupt(
+    motor2.getIntNum(), []() {
+      motor2.pulsePosPlus();
+    },
+    RISING);
 
   // Set motors PWM 8KHz
   TCCR1A = _BV(WGM10);
@@ -166,107 +85,214 @@ void setup()
   TCCR2B = _BV(CS21);
   //--
 
-  // Motors encoders configuration
+  // Motor configuration
   motor1.setPulse(9);
   motor2.setPulse(9);
   motor1.setRatio(39.267);
   motor2.setRatio(39.267);
-  motor1.setPosPid(1.8,0,1.2);
-  motor2.setPosPid(1.8,0,1.2);
-  motor1.setSpeedPid(0.18,0,0);
-  motor2.setSpeedPid(0.18,0,0);
-  //--
-  
+  motor1.setPosPid(1.8, 0, 1.2);
+  motor2.setPosPid(1.8, 0, 1.2);
+  motor1.setSpeedPid(0.18, 0, 0);
+  motor2.setSpeedPid(0.18, 0, 0);
+
+  sendScanAngle(FORWARD_SCAN_ANGLE);
 }
 
-void loop()
-{
+void loop() {
   updateDistance();
-  frontDistance = ultraSensor.distanceCm();
+  updateUltrasonic();
+  updateGyro();
+  detectObstacles();
+  move();
 
-  if (state == 0) // Move forward
-  {
-    if (frontDistance < MIN_DISTANCE) // Stop moving and 
-    {
-      stop();
-      state = 1;
-      scanState = 0;
-    }
-    else
-    {
-      move(MAX_SPEED, MAX_SPEED);
-    }
-  }
-  else if (state == 1) // Steering direction
-  {
-    int intAngle = (int)angle; 
-    if (intAngle >= (MIN_ANGLE + MAX_ANGLE_TOLERANCE) && scanState == 0)
-    {
-      scanState = 1;
-    }
-
-    if (scanState == 1) // Collecting distances
-    {
-      distances[intAngle - 1] = distance;
-    }
-
-    if (scanState == 1 && intAngle >= MAX_ANGLE - MAX_ANGLE_TOLERANCE)
-    {
-      scanState = 2; // All angles scanned
-    }
-
-    if (scanState == 2)
-    {
-      targetAngle = -1;
-      for (int i = MIN_ANGLE; i < MAX_ANGLE - MIN_OPEN_ANGLE ; i++)
-      {
-        if (targetAngle != -1)
-        {
-          state = 3;
-          break;
-        }
-
-        int window_size = 0;
-        targetAngle = i + (MIN_OPEN_ANGLE / 2);
-        for (int j = i; j < i + MIN_OPEN_ANGLE; j++)
-        {
-          if (distances[j] < MIN_DISTANCE)
-          {
-            targetAngle = -1;
-            break;
-          }
-        }
-      }
-
-      if (targetAngle == -1) // No open angle to move found, turn 90 degrees to the left
-      {
-        targetAngle = 0;
-        state = 3;
-      }
-    }
-  }
-  else if (state == 3) // Rotation to the target direction
-  {
-    motor2.setTarPWM(ANGLE_TO_MOTOR_MULTIPLIER * (targetAngle - 90)); // Decrease 90 degrees since the target degree is based on the servo angle
-    motor1.setTarPWM(ANGLE_TO_MOTOR_MULTIPLIER * (targetAngle - 90));
-    motor1.loop();
-    motor2.loop();
-
-    state = 0;
-  }
-
-  Serial.print("State:");
+  Serial.print(", State: ");
   Serial.print(state);
-  Serial.print(", Distance:");
-  Serial.print(distance);
-  Serial.print(", FrontDistance:");
-  Serial.print(frontDistance);
-  Serial.print(", Servo Angle:");
+  Serial.print(", Lidar: ");
+  Serial.print(distanceLidar);
+  //Serial.print(", Ultrasonic: "); Serial.print(distanceUltrasonic);
+  Serial.print(", Angle: ");
   Serial.print(angle);
-  Serial.print(", Target Angle:");
-  Serial.print(targetAngle);
-  
-  
+  Serial.print(", CurrentScanObstacleDetected: ");
+  Serial.print(currentScanObstacleDetected);
+  Serial.print(", ObstacleDetected: ");
+  Serial.print(obstacleDetected);
+  Serial.print(", CurrentScanMaxDistance: ");
+  Serial.print(currentScanMaxDistance);
+  Serial.print(", CurrentScanMaxDistanceAngle: ");
+  Serial.print(currentScanMaxDistanceAngle);
+  Serial.print(", MaxDistanceAngle: ");
+  Serial.print(maxDistanceAngle);
+  Serial.print(", WaitNextScan: ");
+  Serial.print(waitNextScan);
   Serial.println();
 }
 
+/*****************/
+/*      Lidar    */
+/*****************/
+void updateDistance() {
+  tfmini.readSensor();
+  int dist = tfmini.getDistance();
+  int strength = tfmini.getStrength();
+  int temperature = tfmini.getTemperature();
+
+  // Check for and handle any errors.
+  if (dist < 0) {
+    //Serial.println(TFminiS::getErrorString(dist));
+  } else {
+    distanceLidar = dist;
+  }
+}
+
+/*****************/
+/*  Ultrasonic   */
+/*****************/
+void updateUltrasonic() {
+  distanceUltrasonic = ultraSensor.distanceCm();
+}
+
+/*****************/
+/*      Gyro     */
+/*****************/
+void updateGyro() {
+  gyro.update();
+}
+
+/*****************/
+/*    Movement   */
+/*****************/
+void move(float leftSpeed, float rightSpeed) {
+  motor1.setMotorPwm((int)-leftSpeed);  // Inverted due to tank tread orientation
+  motor2.setMotorPwm((int)rightSpeed);
+}
+
+/*******************/
+/* I2C Communication */
+/*******************/
+void receiveAngle(int howMany) {
+  char receivedBuffer[10];
+  int index = 0;
+
+  while (Wire.available() && index < sizeof(receivedBuffer) - 1) {
+    receivedBuffer[index++] = Wire.read();  // Read bytes into buffer
+  }
+  receivedBuffer[index] = '\0';  // Null-terminate the string
+  angle = atoi(receivedBuffer);  // Convert string to int
+}
+
+void sendScanAngle(int openAngle) {
+  Wire.beginTransmission(EXTENSION_I2C_ID);  // Reset servo angle
+  Wire.write(openAngle);
+  Wire.endTransmission();
+}
+
+/*****************/
+/* Obstacle Detection */
+/*****************/
+void detectObstacles() {
+  if (angle < 0 && currentScanDirection == 1) {
+    if (!waitNextScan) {
+      obstacleDetected = currentScanObstacleDetected;
+      maxDistanceAngle = currentScanMaxDistanceAngle;
+    }
+    currentScanObstacleDetected = false;
+    currentScanDirection = -1;
+    currentScanMaxDistanceAngle = -1;
+    currentScanMaxDistance = -1;
+    waitNextScan = false;
+  }
+
+  if (angle > 0 && currentScanDirection == -1) {
+    if (!waitNextScan) {
+      maxDistanceAngle = currentScanMaxDistanceAngle;
+      obstacleDetected = currentScanObstacleDetected;
+    }
+
+    currentScanObstacleDetected = false;
+    currentScanDirection = 1;
+    currentScanMaxDistanceAngle = -1;
+    currentScanMaxDistance = -1;
+    waitNextScan = false;
+  }
+
+  if (distanceLidar < MIN_DISTANCE) {
+    if (!currentScanObstacleDetected) {
+      currentScanObstacleDetected = true;
+    }
+  }
+
+  currentScanMaxDistanceAngle = distanceLidar > currentScanMaxDistance ? abs(angle) : currentScanMaxDistanceAngle;
+  currentScanMaxDistance = max(currentScanMaxDistance, distanceLidar);
+}
+
+void move() {
+  if (state == 0)  // Stopped
+  {
+    if (!obstacleDetected) 
+    {
+      state = 1;
+    } 
+    else 
+    {
+      sendScanAngle(WIDE_SCAN_ANGLE);
+      waitNextScan = true;
+      maxDistanceAngle = -1;
+      state = 5;  // Find farthest direction
+    }
+  } 
+  else if (state == 1)  // Forward
+  {
+    if (obstacleDetected) 
+    {
+      move(0, 0);
+      state = 0;
+    } 
+    else 
+    {
+      move(MAX_SPEED, MAX_SPEED);
+    }
+  } 
+  else if (state == 2)  // Backward
+  {
+    if (!obstacleDetected) 
+    {
+      state = 4;  // Turn right after backing
+    } 
+    else 
+    {
+      move(-MAX_SPEED, -MAX_SPEED);
+    }
+  } 
+  else if (state == 3)  // Turn left
+  {
+    if (!obstacleDetected) 
+    {
+      state = 0;
+    } 
+    else 
+    {
+      move(MAX_SPEED * TURN_SPEED_MULT, -MAX_SPEED * TURN_SPEED_MULT);
+    }
+  } 
+  else if (state == 4)  // Turn right
+  {
+    if (!obstacleDetected) 
+    {
+      state = 0;
+    } 
+    else 
+    {
+      move(-MAX_SPEED * TURN_SPEED_MULT, MAX_SPEED * TURN_SPEED_MULT);
+    }
+  } 
+  else if (state == 5)  // Find farthest direction
+  {
+    if (maxDistanceAngle != -1) 
+    {
+      state = (maxDistanceAngle < 90) ? 3 : 4;
+      sendScanAngle(FORWARD_SCAN_ANGLE);
+      delay(WAIT_SERVO_POSITION);
+      waitNextScan = true;
+    }
+  }
+}
