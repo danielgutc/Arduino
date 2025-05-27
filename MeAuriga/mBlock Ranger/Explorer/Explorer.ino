@@ -24,15 +24,17 @@ TFminiS tfmini(tfSerial);                 // Lidar
 /*****************/
 /*      Common   */
 /*****************/
-#define MIN_DISTANCE 50
+#define MIN_DISTANCE 75
+#define MIN_DISTANCE_MULT 1.1
 #define MAX_SPEED 75
 #define WIDE_SCAN_ANGLE 180
 #define FORWARD_SCAN_ANGLE 60
 #define EXTENSION_I2C_ID 2
 #define MAIN_CONTROLLER_I2C_ID 1
 #define SERIAL_BAUD 115200
-#define TURN_SPEED_MULT 1.5
-#define WAIT_SERVO_POSITION 2500
+#define TURN_SPEED_MULT 1.4
+#define WAIT_SERVO_POSITION 1500
+#define SCAN_MIN_DISTANCE 999999
 
 int leftMotorSpeed = 0;
 int rightMotorSpeed = 0;
@@ -45,20 +47,26 @@ int currentScanDirection = 1;  // Left = -1, Right = 1
 bool currentScanObstacleDetected = false;
 bool obstacleDetected = false;
 int currentScanMaxDistance = -1;
+int currentScanMinDistance = SCAN_MIN_DISTANCE;
 int currentScanMaxDistanceAngle = -1;
+int minDistance = -1;
+
 int maxDistanceAngle = -1;
 bool waitNextScan = false;
+
+static unsigned long lastSensorsRead = 0;
 
 /*****************/
 /*    MAIN       */
 /*****************/
 void setup() {
   Serial.begin(SERIAL_BAUD);
+  Wire.setClock(400000);
 
   //I2C
   Wire.begin(MAIN_CONTROLLER_I2C_ID);
   Wire.setWireTimeout();
-  Wire.onReceive(receiveAngle);
+  //Wire.onReceive(receiveAngle);
 
   // Lidar
   tfSerial.begin(SERIAL_BAUD);
@@ -95,25 +103,32 @@ void setup() {
   motor1.setSpeedPid(0.18, 0, 0);
   motor2.setSpeedPid(0.18, 0, 0);
 
-  sendScanAngle(FORWARD_SCAN_ANGLE);
+  sendScanMaxAngle(FORWARD_SCAN_ANGLE);
 }
 
 void loop() {
+  if (millis() - lastSensorsRead > 100) {
+    requestScanAngle();
+    updateUltrasonic();
+    //updateGyro();
+
+    lastSensorsRead = millis();
+  }
+  
   updateDistance();
-  updateUltrasonic();
-  updateGyro();
   detectObstacles();
   move();
 
-  Serial.print(", State: ");
+  log();
+}
+
+void log() {
+  Serial.print("State: ");
   Serial.print(state);
   Serial.print(", Lidar: ");
   Serial.print(distanceLidar);
-  //Serial.print(", Ultrasonic: "); Serial.print(distanceUltrasonic);
   Serial.print(", Angle: ");
   Serial.print(angle);
-  Serial.print(", CurrentScanObstacleDetected: ");
-  Serial.print(currentScanObstacleDetected);
   Serial.print(", ObstacleDetected: ");
   Serial.print(obstacleDetected);
   Serial.print(", CurrentScanMaxDistance: ");
@@ -142,6 +157,7 @@ void updateDistance() {
   } else {
     distanceLidar = dist;
   }
+  //Serial.println(dist);
 }
 
 /*****************/
@@ -169,18 +185,22 @@ void move(float leftSpeed, float rightSpeed) {
 /*******************/
 /* I2C Communication */
 /*******************/
-void receiveAngle(int howMany) {
-  char receivedBuffer[10];
-  int index = 0;
+void requestScanAngle() {
+  Wire.requestFrom(EXTENSION_I2C_ID, 10);
+  if (Wire.available() >= 10) {
+    char receivedBuffer[10];
+    int index = 0;
 
-  while (Wire.available() && index < sizeof(receivedBuffer) - 1) {
-    receivedBuffer[index++] = Wire.read();  // Read bytes into buffer
+    while (Wire.available() && index < sizeof(receivedBuffer) - 1) {
+      receivedBuffer[index++] = Wire.read();  // Read bytes into buffer
+    }
+    receivedBuffer[index] = '\0';  // Null-terminate the string
+    angle = atoi(receivedBuffer);  // Convert string to int
   }
-  receivedBuffer[index] = '\0';  // Null-terminate the string
-  angle = atoi(receivedBuffer);  // Convert string to int
+  
 }
 
-void sendScanAngle(int openAngle) {
+void sendScanMaxAngle(int openAngle) {
   Wire.beginTransmission(EXTENSION_I2C_ID);  // Reset servo angle
   Wire.write(openAngle);
   Wire.endTransmission();
@@ -192,36 +212,31 @@ void sendScanAngle(int openAngle) {
 void detectObstacles() {
   if (angle < 0 && currentScanDirection == 1) {
     if (!waitNextScan) {
-      obstacleDetected = currentScanObstacleDetected;
       maxDistanceAngle = currentScanMaxDistanceAngle;
+      obstacleDetected = currentScanMinDistance < minDistance ? true : false;
+      
     }
-    currentScanObstacleDetected = false;
     currentScanDirection = -1;
     currentScanMaxDistanceAngle = -1;
     currentScanMaxDistance = -1;
+    currentScanMinDistance = SCAN_MIN_DISTANCE;
     waitNextScan = false;
   }
 
   if (angle > 0 && currentScanDirection == -1) {
     if (!waitNextScan) {
       maxDistanceAngle = currentScanMaxDistanceAngle;
-      obstacleDetected = currentScanObstacleDetected;
+      obstacleDetected = currentScanMinDistance < minDistance ? true : false;
     }
 
-    currentScanObstacleDetected = false;
     currentScanDirection = 1;
     currentScanMaxDistanceAngle = -1;
     currentScanMaxDistance = -1;
+    currentScanMinDistance = SCAN_MIN_DISTANCE;
     waitNextScan = false;
   }
-
-  if (distanceLidar < MIN_DISTANCE) {
-    if (!currentScanObstacleDetected) {
-      currentScanObstacleDetected = true;
-    }
-  }
-
   currentScanMaxDistanceAngle = distanceLidar > currentScanMaxDistance ? abs(angle) : currentScanMaxDistanceAngle;
+  currentScanMinDistance = min(currentScanMinDistance, distanceLidar);
   currentScanMaxDistance = max(currentScanMaxDistance, distanceLidar);
 }
 
@@ -231,10 +246,12 @@ void move() {
     if (!obstacleDetected) 
     {
       state = 1;
+      minDistance = MIN_DISTANCE;
     } 
     else 
     {
-      sendScanAngle(WIDE_SCAN_ANGLE);
+      minDistance = MIN_DISTANCE * MIN_DISTANCE_MULT;
+      sendScanMaxAngle(WIDE_SCAN_ANGLE);
       waitNextScan = true;
       maxDistanceAngle = -1;
       state = 5;  // Find farthest direction
@@ -290,9 +307,10 @@ void move() {
     if (maxDistanceAngle != -1) 
     {
       state = (maxDistanceAngle < 90) ? 3 : 4;
-      sendScanAngle(FORWARD_SCAN_ANGLE);
-      delay(WAIT_SERVO_POSITION);
+      sendScanMaxAngle(FORWARD_SCAN_ANGLE);
       waitNextScan = true;
+      obstacleDetected = true;
+      delay(WAIT_SERVO_POSITION);
     }
   }
 }

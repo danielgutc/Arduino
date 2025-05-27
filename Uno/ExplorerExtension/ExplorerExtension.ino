@@ -23,8 +23,9 @@ void setup() {
 
   // I2C messaging
   Wire.begin(EXTENSION_I2C_ID);
-  Wire.setWireTimeout();
+  //Wire.setWireTimeout();
   Wire.onReceive(receiveServoAngle);
+  Wire.onRequest(sendCurrentAngle);
 
   // Servo
   servo.attach(SERVO_PORT_ID);
@@ -60,9 +61,14 @@ void receiveServoAngle(int howMany) {
   }
 }
 
+void sendCurrentAngle() {
+  char buffer[10];
+  sprintf(buffer, "%d", (int)angle * direction);
+  Wire.write(buffer);
+}
+
 void loop() {
   // Servo motor
-  
   angle += speed * direction;
 
   if (angle >= maxAngle) {
@@ -74,14 +80,5 @@ void loop() {
   }
   servo.write(angle);
 
-  // Messaging
-  char buffer[10];
-  sprintf(buffer, "%d", (int)angle * direction);
-  Wire.beginTransmission(MAIN_CONTROLLER_I2C_ID);  // transmit to main controller
-  Wire.write(buffer);
-  Wire.endTransmission();  // stop transmitting
-
   log();
-
-  //delay(10);
 }
