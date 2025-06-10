@@ -1,6 +1,8 @@
 #include <MeAuriga.h>
-MeEncoderOnBoard Encoder_1(SLOT1);
-MeEncoderOnBoard Encoder_2(SLOT2);
+
+MeEncoderOnBoard motor1(SLOT1);           // Left Motor
+MeEncoderOnBoard motor2(SLOT2);           // Right Motor
+
 int16_t moveSpeed = 200;
 
 void Forward(void)

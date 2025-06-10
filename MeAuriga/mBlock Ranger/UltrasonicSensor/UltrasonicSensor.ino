@@ -22,12 +22,19 @@ MeUltrasonicSensor ultraSensor(PORT_10); /* Ultrasonic module can ONLY be connec
 void setup()
 {
   Serial.begin(9600);
+  Serial1.begin(9600);
 }
 
 void loop()
 {
+  
+  Serial1.print("Distance : ");
+  Serial1.print(ultraSensor.distanceCm() );
+  Serial1.println(" cm");
+
   Serial.print("Distance : ");
   Serial.print(ultraSensor.distanceCm() );
   Serial.println(" cm");
+
   delay(100); /* the minimal measure interval is 100 milliseconds */
 }

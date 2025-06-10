@@ -11,8 +11,12 @@
 #include <Math.h>
 #include <TFminiS.h>
 #include <Ewma.h>
+#include <SoftwareSerial.h>
+#include <ArduinoJson.h>
+
 
 // Modules and sensors
+MeBluetooth bluetooth(PORT_16);           // Bluetooth
 MeUltrasonicSensor ultraSensor(PORT_10);  // Ultrasonic module
 MeEncoderOnBoard motor1(SLOT1);           // Left Motor
 MeEncoderOnBoard motor2(SLOT2);           // Right Motor
@@ -26,7 +30,7 @@ TFminiS tfmini(tfSerial);                 // Lidar
 /*****************/
 #define MIN_DISTANCE 75
 #define MIN_DISTANCE_MULT 1.1
-#define MAX_SPEED 75
+#define MAX_SPEED 0 //75
 #define WIDE_SCAN_ANGLE 180
 #define FORWARD_SCAN_ANGLE 60
 #define EXTENSION_I2C_ID 2
@@ -55,6 +59,7 @@ int maxDistanceAngle = -1;
 bool waitNextScan = false;
 
 static unsigned long lastSensorsRead = 0;
+static unsigned long lastLogSent = 0;
 
 /*****************/
 /*    MAIN       */
@@ -63,10 +68,13 @@ void setup() {
   Serial.begin(SERIAL_BAUD);
   Wire.setClock(400000);
 
+  if (bluetooth.available()) {
+    bluetooth.println("AT+RESET");
+  }
+
   //I2C
   Wire.begin(MAIN_CONTROLLER_I2C_ID);
   Wire.setWireTimeout();
-  //Wire.onReceive(receiveAngle);
 
   // Lidar
   tfSerial.begin(SERIAL_BAUD);
@@ -85,6 +93,7 @@ void setup() {
       motor2.pulsePosPlus();
     },
     RISING);
+  // --
 
   // Set motors PWM 8KHz
   TCCR1A = _BV(WGM10);
@@ -102,16 +111,14 @@ void setup() {
   motor2.setPosPid(1.8, 0, 1.2);
   motor1.setSpeedPid(0.18, 0, 0);
   motor2.setSpeedPid(0.18, 0, 0);
+  // --
 
   sendScanMaxAngle(FORWARD_SCAN_ANGLE);
 }
 
 void loop() {
-  if (millis() - lastSensorsRead > 100) {
+  if (millis() - lastSensorsRead > 250) {
     requestScanAngle();
-    updateUltrasonic();
-    //updateGyro();
-
     lastSensorsRead = millis();
   }
   
@@ -119,7 +126,10 @@ void loop() {
   detectObstacles();
   move();
 
-  log();
+  if (millis() - lastLogSent > 100) {
+    log();
+    lastLogSent = millis();
+  }
 }
 
 void log() {
@@ -139,7 +149,32 @@ void log() {
   Serial.print(maxDistanceAngle);
   Serial.print(", WaitNextScan: ");
   Serial.print(waitNextScan);
+  Serial.print(", leftMotorSpeed: ");
+  Serial.print(leftMotorSpeed);
+  Serial.print(", rightMotorSpeed: ");
+  Serial.print(rightMotorSpeed);
   Serial.println();
+
+  if (bluetooth.available())
+  {
+    StaticJsonDocument<256> tel;
+    tel["State"] = state;
+    tel["Lidar"] = distanceLidar;
+    tel["Ultrasonic"] = distanceUltrasonic;
+    tel["Angle"] = angle;
+    tel["ObstacleDetected"] = obstacleDetected;
+    tel["CurrentScanMaxDistance"] = currentScanMaxDistance;
+    tel["CurrentScanMaxDistanceAngle"] = currentScanMaxDistanceAngle;
+    tel["MaxDistanceAngle"] = maxDistanceAngle;
+    tel["WaitNextScan"] = waitNextScan;
+    tel["LeftMotorSpeed"] = leftMotorSpeed;
+    tel["RightMotorSpeed"] = rightMotorSpeed;
+
+    // Serialize and send
+    String json;
+    serializeJson(tel, json);
+    bluetooth.println(json);
+  }
 }
 
 /*****************/
@@ -152,12 +187,9 @@ void updateDistance() {
   int temperature = tfmini.getTemperature();
 
   // Check for and handle any errors.
-  if (dist < 0) {
-    //Serial.println(TFminiS::getErrorString(dist));
-  } else {
+  if (dist >= 0) {
     distanceLidar = dist;
   }
-  //Serial.println(dist);
 }
 
 /*****************/
@@ -177,14 +209,20 @@ void updateGyro() {
 /*****************/
 /*    Movement   */
 /*****************/
+// TODO refactor to use object properties
 void move(float leftSpeed, float rightSpeed) {
+  // For logging purposes. 
+  leftMotorSpeed = leftSpeed;
+  rightMotorSpeed = rightSpeed;
+  // --
+
   motor1.setMotorPwm((int)-leftSpeed);  // Inverted due to tank tread orientation
   motor2.setMotorPwm((int)rightSpeed);
 }
 
-/*******************/
+/*********************/
 /* I2C Communication */
-/*******************/
+/*********************/
 void requestScanAngle() {
   Wire.requestFrom(EXTENSION_I2C_ID, 10);
   if (Wire.available() >= 10) {
@@ -206,9 +244,9 @@ void sendScanMaxAngle(int openAngle) {
   Wire.endTransmission();
 }
 
-/*****************/
-/* Obstacle Detection */
-/*****************/
+/**************/
+/* Move Logic */
+/**************/
 void detectObstacles() {
   if (angle < 0 && currentScanDirection == 1) {
     if (!waitNextScan) {
